@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: smart-ai-apply-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smart_ai_apply
+      POSTGRES_PASSWORD: smart_ai_apply
+      POSTGRES_DB: smart_ai_apply
+    ports:
+      - "5432:5432"
+    volumes:
+      - smart_ai_apply_db_data:/var/lib/postgresql/data
+      # Migration files are mounted outside docker-entrypoint-initdb.d so
+      # they are NOT auto-discovered/ordered by filename. init-db.sh is the
+      # only file the entrypoint finds there, and it runs the two files in
+      # an explicit, hardcoded order - see docker/init-db.sh. Runs only on
+      # first startup against an empty data volume.
+      - "./api&schema/001_user_schema.sql:/migrations/001_user_schema.sql:ro"
+      - "./api&schema/002_company_schema.sql:/migrations/002_company_schema.sql:ro"
+      - "./docker/init-db.sh:/docker-entrypoint-initdb.d/00-run-migrations.sh:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_ai_apply -d smart_ai_apply"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  smart_ai_apply_db_data:
