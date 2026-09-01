@@ -101,12 +101,18 @@ CREATE TABLE building_blocks (
     category building_block_category NOT NULL,
     title VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
+    variants JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMP NOT NULL DEFAULT now(),
     updated_at TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_building_blocks_user_id ON building_blocks(user_id);
 CREATE INDEX idx_building_blocks_conversation_id ON building_blocks(conversation_id);
+
+COMMENT ON COLUMN building_blocks.variants IS
+    'Array of {"angle": "<free text>", "content": "<bullet text>"} objects - '
+    'the 3 distinct-angle rewrites generated alongside the primary content. '
+    'Angle labels are chosen dynamically by the agent, not a fixed enum.';
 
 -- ============================================================
 -- Table: applications
