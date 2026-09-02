@@ -11,7 +11,7 @@ the database structure.
 
 import uuid
 
-from sqlalchemy.dialects.postgresql import ARRAY, ENUM, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, ENUM, JSONB, UUID
 from sqlalchemy.sql import func
 
 from api.extensions import db
@@ -200,6 +200,7 @@ class BuildingBlock(db.Model):
     category = db.Column(building_block_category_enum, nullable=False)
     title = db.Column(db.String(255), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    variants = db.Column(JSONB, nullable=False, default=list)
     created_at = db.Column(db.DateTime, nullable=False, server_default=func.now())
     updated_at = db.Column(db.DateTime, nullable=False, server_default=func.now())
 
@@ -211,6 +212,7 @@ class BuildingBlock(db.Model):
             "category": self.category,
             "title": self.title,
             "content": self.content,
+            "variants": self.variants or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

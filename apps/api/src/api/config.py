@@ -11,6 +11,10 @@ class Config:
         SQLALCHEMY_TRACK_MODIFICATIONS (bool): Disabled for performance.
         DEFAULT_USER_EMAIL (str): Email used to seed/locate the single
             mocked user for this MVP (no real auth yet).
+        PROFILER_AGENT_URL (str): Base URL of the Agent 1 (Profiling)
+            microservice, called synchronously for each conversation turn.
+        PROFILER_AGENT_TIMEOUT_SECONDS (float): Request timeout for calls to
+            the profiler-agent service.
     """
 
     SQLALCHEMY_DATABASE_URI = os.environ.get(
@@ -19,3 +23,5 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     DEFAULT_USER_EMAIL = os.environ.get("DEFAULT_USER_EMAIL", "user@example.com")
+    PROFILER_AGENT_URL = os.environ.get("PROFILER_AGENT_URL", "http://localhost:8001")
+    PROFILER_AGENT_TIMEOUT_SECONDS = float(os.environ.get("PROFILER_AGENT_TIMEOUT_SECONDS", "60"))

@@ -2,7 +2,7 @@
 
 import logging
 
-from flask import Flask
+from flask import Flask, render_template
 
 from api.config import Config
 from api.extensions import db
@@ -47,5 +47,9 @@ def create_app(config_object: type[Config] = Config) -> Flask:
     @app.get("/health")
     def health() -> tuple[dict, int]:
         return {"status": "ok", "service": "api"}, 200
+
+    @app.get("/")
+    def chat() -> str:
+        return render_template("index.html")
 
     return app
