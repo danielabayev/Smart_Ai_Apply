@@ -13,6 +13,27 @@ from typing import Any
 logger = logging.getLogger("profiler_agent.trace")
 logger.setLevel(logging.DEBUG)
 
+
+class ColorPrefixFormatter(logging.Formatter):
+    """Formatter that colors the timestamp/level/logger-name prefix.
+
+    The message body (a pretty-printed JSON record, see `log_event`) is left
+    uncolored - only the prefix is tinted, so consecutive log entries stay
+    visually distinct from each other when scanning a terminal.
+    """
+
+    _PREFIX_COLOR = "\033[36m"  # cyan
+    _RESET = "\033[0m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        prefix = f"{self.formatTime(record)} {record.levelname} [{record.name}]"
+        text = f"{self._PREFIX_COLOR}{prefix}{self._RESET} {record.getMessage()}"
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            text = f"{text}\n{record.exc_text}"
+        return text
+
 # Maps standard level names ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL",
 # ...) to their numeric `logging` values, so `level` drives the actual
 # severity the record is emitted at rather than a binary error/debug choice.
@@ -67,4 +88,4 @@ def log_event(
         "details": details,
     }
     level_value = _LEVEL_NAME_TO_VALUE.get(level.upper(), logging.DEBUG)
-    logger.log(level_value, json.dumps(record, default=str))
+    logger.log(level_value, json.dumps(record, indent=2, default=str))

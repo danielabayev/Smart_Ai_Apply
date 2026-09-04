@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request
 
 from profiler_agent.config import Config
 from profiler_agent.graph import run_turn
-from profiler_agent.logging_utils import log_event
+from profiler_agent.logging_utils import ColorPrefixFormatter, log_event
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +18,10 @@ def create_app() -> Flask:
     Returns:
         Flask: The configured application instance.
     """
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(ColorPrefixFormatter())
+    logging.basicConfig(level=logging.WARNING, handlers=[handler])
+    logging.getLogger("profiler_agent").setLevel(logging.DEBUG)
 
     app = Flask(__name__)
 
