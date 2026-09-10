@@ -6,7 +6,7 @@ Mirrors `agent-structure-en.md` section 3 (wire contract) and section 5
 
 from typing import Literal, TypedDict
 
-Phase = Literal["intro", "background", "skills_and_education", "projects", "summary_and_confirm"]
+Phase = Literal["intro", "background", "skills", "education", "projects", "summary_and_confirm"]
 ConversationType = Literal["profiling", "refinement", "application_edit"]
 BuildingBlockCategory = Literal["project", "technical_skills", "education", "about_user", "role"]
 
@@ -92,6 +92,10 @@ class AgentState(TypedDict, total=False):
     # Persisted across turns via the checkpointer.
     phase: Phase
     summary: str
+    # Consecutive turns with no progress (phase unchanged AND no blocks created/updated) -
+    # a code-level loop breaker forces the next phase once this crosses a threshold
+    # (graph.py's _MAX_STUCK_TURNS), regardless of what the LLM itself decided this turn.
+    phase_streak: int
 
     # Populated by the `generate` node.
     reply: str
