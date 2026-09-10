@@ -61,6 +61,12 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# SQLite state/checkpointer databases (e.g. agents/profiler_agent's LangGraph
+# checkpoint DB) - may contain real conversation data, never commit
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
 # Flask stuff:
 instance/
 .webassets-cache

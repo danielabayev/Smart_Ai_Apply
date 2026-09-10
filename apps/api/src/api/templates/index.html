@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Smart AI Apply - Profiling Chat</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 0; }
+  #layout { display: flex; height: 100vh; }
+
+  #sidebar { width: 280px; flex: none; border-right: 1px solid #ccc; padding: 1rem; overflow-y: auto; box-sizing: border-box; }
+  #sidebar h3 { margin: 0 0 0.5rem; font-size: 0.95em; text-transform: uppercase; color: #666; }
+  #sidebar section { margin-bottom: 1.5rem; }
+  #newConversationBtn { width: 100%; padding: 0.4rem; margin-bottom: 0.5rem; cursor: pointer; }
+
+  .conv-item { padding: 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.9em; margin-bottom: 0.25rem; }
+  .conv-item:hover { background: #f0f0f0; }
+  .conv-item.active { background: #dceaff; }
+  .conv-item .conv-type { font-weight: 600; }
+  .conv-item .conv-meta { color: #888; font-size: 0.85em; }
+
+  .block-item { padding: 0.5rem; border-radius: 6px; margin-bottom: 0.5rem; background: #f7f7f7; font-size: 0.85em; }
+  .block-item .block-title { font-weight: 600; }
+  .block-item .block-category { color: #4a7; font-size: 0.8em; text-transform: uppercase; }
+  .block-item .block-content { color: #555; margin-top: 0.25rem; white-space: pre-wrap; }
+  #buildingBlocks .empty, #conversations .empty { color: #999; font-size: 0.85em; }
+
+  #main { flex: 1; display: flex; flex-direction: column; padding: 1rem 2rem; box-sizing: border-box; min-width: 0; }
+  #history { border: 1px solid #ccc; border-radius: 8px; flex: 1; overflow-y: auto; padding: 1rem; }
+  .msg { margin: 0.5rem 0; padding: 0.5rem 0.75rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; }
+  .msg.user { background: #dceaff; margin-left: auto; text-align: right; }
+  .msg.agent { background: #f0f0f0; }
+  .msg.block { background: #eaffea; border: 1px dashed #7ac27a; font-size: 0.9em; }
+  #composer { display: flex; gap: 0.5rem; margin-top: 1rem; }
+  #input { flex: 1; padding: 0.5rem; }
+  #status { color: #a00; font-size: 0.9em; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div id="layout">
+  <div id="sidebar">
+    <section>
+      <h3>Conversations</h3>
+      <button id="newConversationBtn" type="button">+ New profiling conversation</button>
+      <div id="conversations"></div>
+    </section>
+    <section>
+      <h3>Building Blocks</h3>
+      <div id="buildingBlocks"></div>
+    </section>
+  </div>
+
+  <div id="main">
+    <h2>Profiling Interview</h2>
+    <div id="history"></div>
+    <form id="composer">
+      <input id="input" type="text" placeholder="Type a message..." autocomplete="off" required>
+      <button type="submit">Send</button>
+    </form>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>
+const API = "/api/v1";
+const historyEl = document.getElementById("history");
+const statusEl = document.getElementById("status");
+const conversationsEl = document.getElementById("conversations");
+const buildingBlocksEl = document.getElementById("buildingBlocks");
+let conversationId = null;
+
+function addMessage(role, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.textContent = text;
+  historyEl.appendChild(div);
+  historyEl.scrollTop = historyEl.scrollHeight;
+}
+
+function addBlockNotice(label, block) {
+  addMessage("block", `${label}: [${block.category}] ${block.title}`);
+}
+
+async function loadConversationDetail(id) {
+  conversationId = id;
+  historyEl.innerHTML = "";
+  const detail = await (await fetch(`${API}/conversations/${id}`)).json();
+  for (const m of detail.messages || []) {
+    addMessage(m.sender === "user" ? "user" : "agent", m.content);
+  }
+  renderConversationList(await currentConversations());
+}
+
+let cachedConversations = [];
+async function currentConversations() {
+  const res = await fetch(`${API}/conversations`);
+  cachedConversations = await res.json();
+  return cachedConversations;
+}
+
+function renderConversationList(conversations) {
+  conversationsEl.innerHTML = "";
+  if (!conversations.length) {
+    conversationsEl.innerHTML = '<div class="empty">No conversations yet.</div>';
+    return;
+  }
+  const sorted = [...conversations].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  for (const c of sorted) {
+    const div = document.createElement("div");
+    div.className = "conv-item" + (c.id === conversationId ? " active" : "");
+    const when = new Date(c.created_at).toLocaleString();
+
+    const typeEl = document.createElement("div");
+    typeEl.className = "conv-type";
+    typeEl.textContent = c.type;
+
+    const metaEl = document.createElement("div");
+    metaEl.className = "conv-meta";
+    metaEl.textContent = `${c.status} · ${when}`;
+
+    div.append(typeEl, metaEl);
+    div.addEventListener("click", () => loadConversationDetail(c.id));
+    conversationsEl.appendChild(div);
+  }
+}
+
+async function loadBuildingBlocks() {
+  const res = await fetch(`${API}/building-blocks`);
+  const blocks = await res.json();
+  buildingBlocksEl.innerHTML = "";
+  if (!blocks.length) {
+    buildingBlocksEl.innerHTML = '<div class="empty">No building blocks yet.</div>';
+    return;
+  }
+  for (const b of blocks) {
+    const div = document.createElement("div");
+    div.className = "block-item";
+
+    const category = document.createElement("div");
+    category.className = "block-category";
+    category.textContent = b.category;
+
+    const title = document.createElement("div");
+    title.className = "block-title";
+    title.textContent = b.title;
+
+    const content = document.createElement("div");
+    content.className = "block-content";
+    content.textContent = b.content;
+
+    div.append(category, title, content);
+    buildingBlocksEl.appendChild(div);
+  }
+}
+
+async function createConversation() {
+  const created = await (
+    await fetch(`${API}/conversations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "profiling" }),
+    })
+  ).json();
+  await loadConversationDetail(created.id);
+}
+
+document.getElementById("newConversationBtn").addEventListener("click", () => {
+  statusEl.textContent = "";
+  createConversation().catch((err) => (statusEl.textContent = "Error: " + err.message));
+});
+
+async function init() {
+  const conversations = await currentConversations();
+  const active = conversations.find((c) => c.type === "profiling" && c.status === "active");
+
+  if (active) {
+    await loadConversationDetail(active.id);
+  } else {
+    await createConversation();
+  }
+  await loadBuildingBlocks();
+}
+
+document.getElementById("composer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("input");
+  const content = input.value.trim();
+  if (!content) return;
+
+  input.value = "";
+  statusEl.textContent = "";
+  addMessage("user", content);
+
+  try {
+    const res = await fetch(`${API}/conversations/${conversationId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || err.description || `Request failed (${res.status})`);
+    }
+    const data = await res.json();
+    addMessage("agent", data.agent_reply);
+    for (const b of data.building_blocks_created || []) addBlockNotice("Created", b);
+    for (const b of data.building_blocks_updated || []) addBlockNotice("Updated", b);
+    if ((data.building_blocks_created || []).length || (data.building_blocks_updated || []).length) {
+      await loadBuildingBlocks();
+    }
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+});
+
+init();
+</script>
+</body>
+</html>

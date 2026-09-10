@@ -59,6 +59,8 @@ def update_building_block(block_id: str):
         block.content = body["content"]
     if "category" in body:
         block.category = body["category"]
+    if "variants" in body:
+        block.variants = body["variants"]
 
     reset_job_scan_cursor(block.user_id)
     db.session.commit()
