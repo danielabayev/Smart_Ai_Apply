@@ -32,3 +32,8 @@ and authorization and implement proper API documentation.
 3) check the message send by the user, if the message is long then X words check it more carrfully.
 4) Add logic prevent update the cursor update while conversation keep going, the target is to prevent agent 4 keep evaluate the jobs after every new building block.
 5) Check what happend if the user want more then 3 variants?
+- [ ] Before deploying (k8s): move all env vars currently loaded from local `.env`/`docker-compose.yml`
+      defaults (`GOOGLE_API_KEY`, `POSTGRES_PASSWORD`/`DATABASE_URL`, and any others) into proper
+      k8s `Secret`/`ConfigMap` resources - the current hardcoded dev-only defaults (see the
+      Docker Compose section above) must not carry over as-is.
+also need to check which way will be most fit to share the variants number to all of the projects/code files.
