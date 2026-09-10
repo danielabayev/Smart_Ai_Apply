@@ -1,7 +1,6 @@
 # Agent 1 Structure - Profiling Agent
 
-> **Status:** Draft in progress (built section by section)
-> **Role:** Agent 1 (Profiling) from `api-structure-en.md` section 1.3 - interviews the user, builds their profile, and creates/maintains Building Blocks during the conversation.
+**Role:** Agent 1 (Profiling) from `api-structure-en.md` section 1.3 - interviews the user, builds their profile, and creates/maintains Building Blocks during the conversation.
 
 ---
 
@@ -27,23 +26,21 @@ Both of these are downstream of Agent 1's output, not something Agent 1 does its
 
 ## 2. Invocation Model
 
-**Decision:** Agent 1 is a separate HTTP microservice - its own `agents/profiler_agent` package (matching the `agents/` convention already used by Agents 2-5), deployed as its own k8s Deployment, called **synchronously** by the API Server. No streaming for now.
+Agent 1 runs as its own HTTP microservice - the `agents/profiler_agent` package (matching the `agents/` convention used by Agents 2-5) - called **synchronously**, with no streaming and no retry: `apps/api/src/api/agent_client.py::get_agent_reply()` issues `POST {PROFILER_AGENT_URL}/reply` and blocks until it responds. Any failure (timeout, connection error, non-2xx status) raises and surfaces as a 500 to the API Server's own caller - no silent recovery or degraded continuation.
 
-`apps/api/src/api/agent_client.py::get_agent_reply()` is replaced with an internal HTTP call, e.g. `POST http://profiler-agent/reply`, carrying the same fields the stub function already takes/returns today (`conversation_id`, `conversation_type`, `message_history`, `user_message` in; `reply`, `building_blocks_created`, `building_blocks_updated` out) - the exact wire shape is worth its own section next. The API Server waits for the response before returning from `POST /conversations/:id/messages` - unchanged from today's "no streaming" behavior.
+**Why a separate service instead of running in-process inside `apps/api`:** consistency with how Agents 2-5 are packaged and deployed, independent scaling/restarts from the API server, and the service needs no DB credentials at all - it only ever returns data for the API Server to persist (Section 1).
 
-**Why this over running in-process inside `apps/api`:** consistency with how Agents 2-5 are packaged and deployed, independent scaling/restarts from the API server, and the service needs no DB credentials at all - it only ever returns data for the API Server to persist (Section 1).
-
-**Follow-up decisions this creates** (not resolved yet, tracked in Open Points below): timeout/retry policy for when the service is slow or down, and readiness/liveness probes for the k8s Deployment.
+**Current gap:** `GET /health` exists (see Section 3) for a future k8s readiness/liveness probe, but no k8s Deployment manifest exists yet for this service.
 
 ---
 
 ## 3. Wire Contract
 
-**Decision:** single-shot request/response. Agent 1 never fetches anything on its own mid-turn (no tool-calling back into the API Server) - the API Server pre-loads everything Agent 1 could need for that turn and sends it in one request. This trades flexibility for a simpler, stateless service with predictable latency (one network hop per turn, no nested round trips inside a synchronous, non-streaming call).
+Single-shot request/response. Agent 1 never fetches anything on its own mid-turn (no tool-calling back into the API Server) - the API Server pre-loads everything Agent 1 could need for that turn and sends it in one request. This keeps the service simple and stateless with predictable latency: one network hop per turn, no nested round trips inside a synchronous, non-streaming call.
 
-**Payload philosophy: send generously, not minimally.** Since there's no second chance to ask for more mid-turn, under-including a field is a real failure mode (the agent silently doesn't know something), while over-including one is free - the API Server already has the full row loaded from the DB. So `context.job` carries the **entire job record** (plus the company it belongs to), not a hand-picked subset. If a field turns out to be genuinely unused by the prompts, it gets dropped later based on real usage - not guessed away up front.
+**Payload philosophy: send generously, not minimally.** Since there's no second chance to ask for more mid-turn, under-including a field is a real failure mode (the agent silently doesn't know something), while over-including one is free - the API Server already has the full row loaded from the DB. So `context.job` carries the **entire job record** (plus the company it belongs to), not a hand-picked subset. A field only gets dropped later if it turns out to be genuinely unused by the prompts, based on real usage - never guessed away up front.
 
-**Endpoint:** `POST /reply` (plus `GET /health` for the k8s readiness/liveness probe noted above - not detailed here).
+**Endpoint:** `POST /reply` (plus `GET /health` for the k8s probe noted in Section 2).
 
 ### Request
 
@@ -51,6 +48,7 @@ Both of these are downstream of Agent 1's output, not something Agent 1 does its
 {
   "conversation_id": "conv-3",
   "conversation_type": "application_edit",
+  "user_id": "u-1",
   "message_history": [
     { "sender": "user", "content": "...", "created_at": "..." }
   ],
@@ -91,6 +89,7 @@ Fields present per type (per the Section 1 table):
 
 | Field | `profiling` | `refinement` | `application_edit` |
 |---|---|---|---|
+| `user_id` | present (tracing only) | present (tracing only) | present (tracing only) |
 | `building_block_id` | `null` | the block being reworded | the block being replaced for this application |
 | `application_id` | `null` | `null` | the application this variant is for |
 | `context.existing_building_blocks` | full list of the user's blocks | `null` | `null` |
@@ -99,7 +98,7 @@ Fields present per type (per the Section 1 table):
 
 `job`'s field list mirrors `Job.to_dict()` in `apps/api/src/api/models.py`, plus a nested `company` object (id/name/website), minus pure audit timestamps (`discovered_at`/`updated_at`) - those are bookkeeping, not job content, and are the one deliberate exclusion from "send everything."
 
-**Decision: irrelevant `context` keys are always present, set to `null` - never omitted.** Every request carries all four `context.*` keys (and `building_block_id`/`application_id`) regardless of `conversation_type`; only their value differs (populated vs. `null`). This gives a single, fixed request shape across all three types (one example teaches the whole contract, no need to compare three payloads to learn the full field list), and keeps "not relevant to this type" (explicit `null`) distinguishable from "a bug forgot to set it" (a key that should exist but doesn't). This deliberately differs from `building_blocks_created` omitting `id` entirely (Response section below) - that's a different situation: the value there cannot exist yet (no row has been inserted), whereas a `context` field always conceptually exists, it's just empty for this turn.
+**Irrelevant `context` keys are always present, set to `null` - never omitted.** Every request carries all four `context.*` keys (and `building_block_id`/`application_id`) regardless of `conversation_type`; only their value differs (populated vs. `null`). This gives a single, fixed request shape across all three types (one example teaches the whole contract, no need to compare three payloads to learn the full field list), and keeps "not relevant to this type" (explicit `null`) distinguishable from "a bug forgot to set it" (a key that should exist but doesn't). This deliberately differs from `building_blocks_created` omitting `id` entirely (Response section below) - that's a different situation: the value there cannot exist yet (no row has been inserted), whereas a `context` field always conceptually exists, it's just empty for this turn.
 
 ### Response (success)
 
@@ -115,7 +114,7 @@ Fields present per type (per the Section 1 table):
 - `refinement` → only `building_blocks_updated`, exactly one entry, `id` equal to the request's `building_block_id`.
 - `application_edit` → only `building_blocks_created`, exactly one entry (the variant) - no `id`, and no explicit link back to the block it replaces; the API Server already has that pairing from the request it sent (`building_block_id` + `application_id`), so nothing extra is needed here.
 
-**Why `created` entries never carry an `id`:** `building_blocks.id` is assigned client-side by the API Server (`default=uuid.uuid4` on the SQLAlchemy model, not a DB-generated column) - Agent 1 never touches that model, so it cannot know an id for a row that doesn't exist yet. `updated` entries, by contrast, reference a row that already exists, so the id is already known and must be echoed back. The API Server should treat a mismatched `id` in `building_blocks_updated` (not equal to the request's `building_block_id`) as a bug and fail loudly (logged as an error) rather than accept it silently - exact logging conventions are still to be defined in a later section.
+**Why `created` entries never carry an `id`:** `building_blocks.id` is assigned client-side by the API Server (`default=uuid.uuid4` on the SQLAlchemy model, not a DB-generated column) - Agent 1 never touches that model, so it cannot know an id for a row that doesn't exist yet. `updated` entries, by contrast, reference a row that already exists, so the id is already known and must be echoed back. The API Server treats a mismatched `id` in `building_blocks_updated` (not equal to the request's `building_block_id`) as a bug and fails loudly (`abort(500)`, logged as an error) rather than accepting it silently.
 
 ### Response (failure)
 
@@ -129,9 +128,9 @@ No message is persisted by the API Server in this case.
 
 ## 4. Internal Memory
 
-**Decision:** Agent 1 keeps its own private state between turns of the same conversation, via a LangGraph **checkpointer** - keyed by `conversation_id`, backed by a small datastore Agent 1 owns exclusively (a separate, private store - not the platform's shared Postgres DB from `001_user_schema.sql`/`002_company_schema.sql`; concrete technology - Redis/Postgres/SQLite - not decided yet).
+Agent 1 keeps its own private state between turns of the same conversation, via a LangGraph **checkpointer** (`SqliteSaver`) keyed by `conversation_id`, backed by a SQLite file Agent 1 owns exclusively (`profiler_agent/config.py::Config.CHECKPOINT_DB_PATH`, default `profiler_agent_state.sqlite3` inside `agents/profiler_agent/`) - not the platform's shared Postgres DB from `001_user_schema.sql`/`002_company_schema.sql`.
 
-**What it stores:** conversation-progress state only - e.g. a running summary and/or the current interview phase (see Section 5). It **never** stores building blocks, job data, or anything covered by `context` in Section 3 - those always come fresh from the API Server's request, since the shared DB (not Agent 1's private memory) is the single source of truth for them. This avoids a dual-source-of-truth drift risk: if a block is edited through a different path (e.g. a separate `refinement` conversation, or a direct `PATCH /building-blocks/:id`) while this `profiling` conversation is ongoing, Agent 1 must never be working off a stale private copy of that block.
+**What it stores:** conversation-progress state only - a running `summary`, the current interview `phase`, and `phase_streak` (Section 5). It **never** stores building blocks, job data, or anything covered by `context` in Section 3 - those always come fresh from the API Server's request, since the shared DB (not Agent 1's private memory) is the single source of truth for them. This avoids a dual-source-of-truth drift risk: if a block is edited through a different path (e.g. a separate `refinement` conversation, or a direct `PATCH /building-blocks/:id`) while this `profiling` conversation is ongoing, Agent 1 must never be working off a stale private copy of that block.
 
 **Why `message_history` still carries the full transcript in every request (Section 3 doesn't shrink):** it's a resilience fallback, not the primary mechanism. When a valid checkpoint exists for the conversation, Agent 1 uses its own compact internal state instead of reprocessing the full history - this is what actually solves the token/latency growth problem in a long-running `profiling` conversation. When no checkpoint exists (or it was lost - e.g. a redeploy, or the private store's data was reset), Agent 1 falls back to reconstructing its state directly from the full `message_history` it was sent anyway. The API Server's request shape doesn't need to know or care which case applies - it always sends the same payload.
 
@@ -141,29 +140,44 @@ No message is persisted by the API Server in this case.
 
 ## 5. Conversation Flow (`profiling`)
 
-**Decision:** no rigid state machine. One system prompt drives the whole interview; the LLM decides what to ask next based on the checkpoint's summary + `context.existing_building_blocks`, the same way a skilled interviewer would, rather than following a hard-coded step order. On top of that, the same LLM call also reports back a `phase` label each turn - purely for tracking and to keep the prompt focused, never to enforce order. This is a middle ground between a fully scripted flow and a fully unstructured one.
+Each interview phase gets its own LangGraph node with its own narrow, phase-specific system prompt (`prompts.py`), rather than one prompt covering every topic - this keeps each call focused on exactly one job.
 
-**Graph shape** (deliberately thin, since C doesn't need per-phase nodes):
+**What's not a rigid state machine:** *within* a phase, the node's own LLM call decides everything a skilled interviewer would - what to ask next, when enough detail exists, when to draft bullet variants, when the topic is exhausted. *Between* phases, moving on (or not) is likewise the node's own judgment call, described in each phase's prompt; nothing in `graph.py` decides that a topic is "done" under normal operation (the one exception is the stuck-loop breaker described below). The only thing code decides is *which* node/prompt applies to the current turn - based on `conversation_type` and the agent's own previously-reported `phase`.
+
+**Graph shape:**
 
 ```
-load_state → generate
+                                   ┌─ intro_node ────────────┐
+                                   ├─ background_node ───────┤
+load_state → route_turn (by        ├─ skills_node ───────────┤
+  conversation_type + phase)  ──→  ├─ education_node ────────┼──→ END
+                                   ├─ projects_node ─────────┤
+                                   ├─ summary_confirm_node ──┤
+                                   └─ other_node ────────────┘
 ```
 
-- `load_state` - reads the checkpoint (Section 4) for this `conversation_id`: `{ phase, summary }`. Falls back to reconstructing from the full `message_history` if no checkpoint exists yet or it was lost.
-- `generate` - the single LLM call. Input: summary/history, current `phase`, `context.existing_building_blocks`, `user_message`. Output (structured): `{ reply, phase, building_blocks_created }`.
+- `load_state` - reads the checkpoint (Section 4) for this `conversation_id`: `{ phase, summary, phase_streak }`. Falls back to reconstructing from the full `message_history` if no checkpoint exists yet or it was lost.
+- `route_turn` - a conditional edge, not an LLM call. `conversation_type != "profiling"` → `other_node` (refinement/application_edit, single prompt, no phases). Otherwise: `user_message == ""` → `intro_node` (the one-time kickoff signal, per Section 3); else dispatch on the agent's own last-reported `phase` to the matching node, defaulting to `background_node` for a stale/lost/unrecognized phase (a safe re-entry point, since the kickoff has clearly already happened if `user_message` is non-empty).
+- Each phase node (`intro_node`/`background_node`/`skills_node`/`education_node`/`projects_node`/`summary_confirm_node`) runs the same shared LLM-call body (`_run_llm_turn` in `graph.py`) with that phase's own dedicated system prompt. Input: `summary`, current `phase`, `context.existing_building_blocks`, `user_message`, `message_history`. Output (structured): `{ reply, phase, summary, building_blocks_created, building_blocks_updated, drafted_variants }`.
 
-The updated `{ phase, summary }` isn't written back explicitly by either node - LangGraph's checkpointer snapshots the full state automatically after every node runs, so it's already persisted by the time `generate` returns. An earlier `persist_state` node existed for this but did no persistence of its own (nothing it needed to do wasn't already handled by the checkpointer); it was dropped and its one trace log line moved into `generate`. Nothing here reaches the wire contract (Section 3) either way - `phase`/`summary` are internal only, the API Server never sees them.
+The updated `{ phase, summary, phase_streak }` isn't written back explicitly by any node - LangGraph's checkpointer snapshots the full state automatically after every node runs, so it's already persisted by the time the node returns. Nothing here reaches the wire contract (Section 3) either way - these fields are internal only, the API Server never sees them.
 
-**Proposed `phase` values** (draft - a label the LLM assigns itself, not a code-enforced sequence):
+**`phase` values** (each maps to one node + one building-block category; the agent self-reports which applies next - `route_turn` reads that value to pick the next node):
 
-| Phase | Roughly covers | Building blocks typically created here |
-|---|---|---|
-| `intro` | first turn only, agent introduces itself | none |
-| `background` | free-form background/experience overview | `about_user` |
-| `skills_and_education` | programming languages, general skills, education | `technical_skills`, `education` |
-| `projects` | project-by-project questioning | `project` (one per project, as it's ready) |
-| `summary_and_confirm` | role synthesis, final review, polishing, confirmation | `role`, then updates only |
+| Phase | Node | Roughly covers | Building block category |
+|---|---|---|---|
+| `intro` | `intro_node` | first turn only (kickoff), agent introduces itself | none |
+| `background` | `background_node` | free-form background/experience overview | `about_user` (simple fact - no variants, no confirmation turn) |
+| `skills` | `skills_node` | programming languages, tools, technologies | `technical_skills` (simple fact - no variants, no confirmation turn) |
+| `education` | `education_node` | degrees, certifications, formal training | `education` (simple fact - no variants, no confirmation turn) |
+| `projects` | `projects_node` | project-by-project STAR-driven questioning | `project` (achievement narrative - 3 bullet variants drafted, created only after a later confirming turn) |
+| `summary_and_confirm` | `summary_confirm_node` | role synthesis, final review, wrap-up | `role` (achievement narrative - same 3-variant/confirm flow as `project`) |
 
-No code enforces moving forward through this list in order - the LLM can report the same phase again, or an earlier one (e.g. user adds a project after reaching `summary_and_confirm`), and that's expected, not an error. The `phase` value's only jobs are: (1) let the next turn's prompt be more focused ("you're currently in the projects phase"), and (2) give us visibility in logs into how a given interview is progressing.
+No code enforces moving forward through this list in order - the agent can report the same phase again, or an earlier one (e.g. user adds a project after reaching `summary_and_confirm`), and `route_turn` will happily send the next turn back to that phase's node. That's expected, not an error.
 
-**Scope:** this section applies to `profiling` only. `refinement`/`application_edit` don't use `phase` at all - they're already narrowly scoped from the start via `building_block_id`/`application_id` in the request, so there's no multi-step interview to track.
+**Guards inside `_run_llm_turn` (`graph.py`), applied on top of the node's own LLM call:**
+- **Legal-phase clamp:** each node has a fixed set of `phase` values it's allowed to output next (`_LEGAL_OUTGOING_PHASES`) - e.g. `projects_node` may only report `projects` or `summary_and_confirm`. An out-of-set value is clamped back to the incoming phase (stay put), never redirected to some other guessed phase.
+- **Pending-draft clamp:** `projects`/`summary_and_confirm` are draft-then-confirm phases - a turn that just presented a fresh, not-yet-confirmed bullet draft (`drafted_variants` non-empty, nothing created yet) is not allowed to also advance `phase` in the same turn, since that would route the user's next (confirming) message to the wrong node and silently orphan the achievement.
+- **Stuck-loop breaker:** if a phase makes zero progress (`phase` unchanged **and** no blocks created/updated) for `_MAX_STUCK_TURNS` (5) consecutive turns, code forces the next phase from a fixed fallback order (`_PHASE_SEQUENCE`), regardless of what the LLM decided. This is deliberately progress-on-phase-change-only, not "or created any blocks" - a stuck node could otherwise keep emitting spurious blocks turn after turn without ever advancing, masking the very loop this guard exists to catch. This is the one exception to "code never decides a topic is done": it only fires as a last resort after several turns of measurable non-progress.
+
+**Scope:** this section applies to `profiling` only. `refinement`/`application_edit` don't use `phase`/per-phase nodes at all - they're already narrowly scoped from the start via `building_block_id`/`application_id` in the request, so there's no multi-step interview to track; both route to the single `other_node`.
